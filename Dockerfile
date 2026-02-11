@@ -3,7 +3,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -gcflags="-B" -ldflags="-s -w" -o /pension-engine .
+RUN CGO_ENABLED=0 GOOS=linux go build -gcflags="all=-B" -ldflags="-s -w" -o /pension-engine .
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
