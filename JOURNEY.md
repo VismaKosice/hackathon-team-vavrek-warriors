@@ -330,3 +330,34 @@ Built with **Claude Code** (Claude Opus 4.6) as a pair programming partner throu
 ---
 
 *Total development time: ~5 hours. From empty repo to 54,000 requests/second.*
+
+----
+
+# What We Built
+A pension calculation engine — a single HTTP endpoint (POST /calculation-requests) that takes a sequence of mutations (business operations) and produces a final pension state with full audit trail.
+
+# How It Works Internally
+A request comes in with an ordered list of mutations. The engine processes them sequentially:
+  Request → Unmarshal → Engine Loop → Marshal → Response
+                           │
+                           ├── create_dossier      → sets up participant + person
+                           ├── add_policy           → adds pension policy with salary
+                           ├── apply_indexation     → adjusts salaries by percentage
+                           ├── calculate_retirement → computes pension entitlement
+                           └── project_future       → projects pension at intervals
+Each mutation:
+  1. Validates preconditions (dossier exists? person eligible?)
+  2. Modifies the in-memory Situation state
+  3. Emits forward + backward JSON patches (RFC 6902) describing exactly what changed
+  4. Returns messages (warnings/errors)
+
+The engine collects everything into a response: final state, all patches (so you can replay or undo any mutation), and all messages.
+
+## What's Unique About It
+**Mutation-aware patches**: this is the key architectural win. Most implementations diff the entire state tree before/after each mutation (generic approach). We have each handler generate its own patches from domain knowledge. add_policy knows it added one item to an array — no need to diff the whole tree to figure that out. This eliminated 200 lines of diffing code and was the difference between 20k and 54k req/s.
+
+**The performance stack**: fasthttp + goccy/go-json + GOGC=2000 + bounds-check-free binary. Each individually gives modest gains; together they compound to ~4x over a naive Go implementation.
+
+**Scheme registry integration**: external HTTP service for per-scheme accrual rates, with sync.Map caching and concurrent fetching. Fetches once, caches forever, falls back to 0.02 if the service is down.
+
+~1,100 lines of Go, 12-line Dockerfile, 134ms cold start, 54k req/s. Clean enough for 4.5/5 code quality from automated AI review.
