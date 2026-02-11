@@ -1,6 +1,8 @@
 package mutations
 
 import (
+	"strconv"
+
 	json "github.com/goccy/go-json"
 
 	"pension-engine/internal/model"
@@ -14,13 +16,13 @@ type applyIndexationProps struct {
 
 type ApplyIndexationHandler struct{}
 
-func (h *ApplyIndexationHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool) {
+func (h *ApplyIndexationHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool, []byte, []byte) {
 	if state.Dossier == nil {
 		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "DOSSIER_NOT_FOUND",
 			Message: "No dossier exists",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	if len(state.Dossier.Policies) == 0 {
@@ -28,7 +30,7 @@ func (h *ApplyIndexationHandler) Execute(state *model.Situation, mutation *model
 			Level:   model.LevelCritical,
 			Code:    "NO_POLICIES",
 			Message: "Dossier has no policies",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	var props applyIndexationProps
@@ -37,6 +39,8 @@ func (h *ApplyIndexationHandler) Execute(state *model.Situation, mutation *model
 	var msgs []model.CalculationMessage
 	hasFilter := props.SchemeID != "" || props.EffectiveBefore != ""
 
+	var fwdOps, bwdOps []patchOp
+
 	// Single pass: validate filter match AND apply indexation
 	matched := false
 	for i := range state.Dossier.Policies {
@@ -44,7 +48,8 @@ func (h *ApplyIndexationHandler) Execute(state *model.Situation, mutation *model
 			continue
 		}
 		matched = true
-		newSalary := state.Dossier.Policies[i].Salary * (1 + props.Percentage)
+		oldSalary := state.Dossier.Policies[i].Salary
+		newSalary := oldSalary * (1 + props.Percentage)
 		if newSalary < 0 {
 			newSalary = 0
 			msgs = append(msgs, model.CalculationMessage{
@@ -54,6 +59,10 @@ func (h *ApplyIndexationHandler) Execute(state *model.Situation, mutation *model
 			})
 		}
 		state.Dossier.Policies[i].Salary = newSalary
+
+		path := "/dossier/policies/" + strconv.Itoa(i) + "/salary"
+		fwdOps = append(fwdOps, patchOp{Op: "replace", Path: path, Value: marshalValue(newSalary)})
+		bwdOps = append(bwdOps, patchOp{Op: "replace", Path: path, Value: marshalValue(oldSalary)})
 	}
 
 	if hasFilter && !matched {
@@ -64,7 +73,7 @@ func (h *ApplyIndexationHandler) Execute(state *model.Situation, mutation *model
 		}}, msgs...)
 	}
 
-	return msgs, false
+	return msgs, false, marshalPatches(fwdOps), marshalPatches(bwdOps)
 }
 
 func matchesFilter(p model.Policy, props applyIndexationProps) bool {

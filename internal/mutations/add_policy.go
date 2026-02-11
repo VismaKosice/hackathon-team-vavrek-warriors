@@ -17,13 +17,13 @@ type addPolicyProps struct {
 
 type AddPolicyHandler struct{}
 
-func (h *AddPolicyHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool) {
+func (h *AddPolicyHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool, []byte, []byte) {
 	if state.Dossier == nil {
 		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "DOSSIER_NOT_FOUND",
 			Message: "No dossier exists",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	var props addPolicyProps
@@ -34,7 +34,7 @@ func (h *AddPolicyHandler) Execute(state *model.Situation, mutation *model.Mutat
 			Level:   model.LevelCritical,
 			Code:    "INVALID_SALARY",
 			Message: "Salary must be non-negative",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	if props.PartTimeFactor < 0 || props.PartTimeFactor > 1 {
@@ -42,7 +42,7 @@ func (h *AddPolicyHandler) Execute(state *model.Situation, mutation *model.Mutat
 			Level:   model.LevelCritical,
 			Code:    "INVALID_PART_TIME_FACTOR",
 			Message: "Part-time factor must be between 0 and 1",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	var msgs []model.CalculationMessage
@@ -73,5 +73,11 @@ func (h *AddPolicyHandler) Execute(state *model.Situation, mutation *model.Mutat
 		Projections:         nil,
 	})
 
-	return msgs, false
+	// Patches: add the new policy at the end of the array
+	idx := len(state.Dossier.Policies) - 1
+	path := "/dossier/policies/" + strconv.Itoa(idx)
+	fwd := marshalPatches([]patchOp{{Op: "add", Path: path, Value: marshalValue(state.Dossier.Policies[idx])}})
+	bwd := marshalPatches([]patchOp{{Op: "remove", Path: path}})
+
+	return msgs, false, fwd, bwd
 }

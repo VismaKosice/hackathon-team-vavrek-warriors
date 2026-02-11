@@ -18,13 +18,13 @@ type createDossierProps struct {
 
 type CreateDossierHandler struct{}
 
-func (h *CreateDossierHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool) {
+func (h *CreateDossierHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool, []byte, []byte) {
 	if state.Dossier != nil {
 		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "DOSSIER_ALREADY_EXISTS",
 			Message: "A dossier already exists",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	var props createDossierProps
@@ -35,7 +35,7 @@ func (h *CreateDossierHandler) Execute(state *model.Situation, mutation *model.M
 			Level:   model.LevelCritical,
 			Code:    "INVALID_NAME",
 			Message: "Name is empty or blank",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	// Single parse: validate date and check future in one operation
@@ -45,7 +45,7 @@ func (h *CreateDossierHandler) Execute(state *model.Situation, mutation *model.M
 			Level:   model.LevelCritical,
 			Code:    "INVALID_BIRTH_DATE",
 			Message: "Birth date is invalid or in the future",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	// Apply
@@ -65,5 +65,9 @@ func (h *CreateDossierHandler) Execute(state *model.Situation, mutation *model.M
 		PolicySeq: 0,
 	}
 
-	return nil, false
+	// Patches: /dossier goes from null to the new dossier
+	fwd := marshalPatches([]patchOp{{Op: "replace", Path: "/dossier", Value: marshalValue(state.Dossier)}})
+	bwd := marshalPatches([]patchOp{{Op: "replace", Path: "/dossier", Value: jsonNull}})
+
+	return nil, false, fwd, bwd
 }

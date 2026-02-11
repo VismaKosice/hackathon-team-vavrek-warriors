@@ -8,7 +8,7 @@ Single HTTP endpoint: `POST /calculation-requests` on port 8080.
 - **Language:** Go
 - **HTTP:** github.com/valyala/fasthttp
 - **JSON:** github.com/goccy/go-json (drop-in, faster than encoding/json)
-- **UUID:** github.com/google/uuid
+- **UUID:** math/rand (fast UUID v4, no external dep)
 - **Docker:** Multi-stage build, scratch base, static binary
 
 ## Project Structure
@@ -23,12 +23,16 @@ internal/
     situation.go                 # Domain: Dossier, Person, Policy
     message.go                   # CalculationMessage
   mutations/
-    mutation.go                  # MutationHandler interface
+    mutation.go                  # MutationHandler interface (returns patches)
     registry.go                  # Name-based registry (no if/else)
+    patch.go                     # patchOp helpers for mutation-aware patches
     create_dossier.go
     add_policy.go
     apply_indexation.go
     calculate_retirement_benefit.go
+    project_future_benefits.go
+  schemeregistry/
+    registry.go                  # External scheme registry client (cached)
 ```
 
 ## Conventions

@@ -2,6 +2,7 @@ package mutations
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -16,13 +17,13 @@ type calcRetirementProps struct {
 
 type CalculateRetirementBenefitHandler struct{}
 
-func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool) {
+func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool, []byte, []byte) {
 	if state.Dossier == nil {
 		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "DOSSIER_NOT_FOUND",
 			Message: "No dossier exists",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	if len(state.Dossier.Policies) == 0 {
@@ -30,7 +31,7 @@ func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, muta
 			Level:   model.LevelCritical,
 			Code:    "NO_POLICIES",
 			Message: "Dossier has no policies",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	var props calcRetirementProps
@@ -65,7 +66,7 @@ func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, muta
 			Level:   model.LevelCritical,
 			Code:    "NOT_ELIGIBLE",
 			Message: fmt.Sprintf("Participant is %d years old with %.1f years of service", int(age), totalYears),
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	// Check retirement before employment (WARNING per violating policy)
@@ -79,6 +80,9 @@ func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, muta
 			})
 		}
 	}
+
+	// Capture old state for backward patches
+	oldStatus := state.Dossier.Status
 
 	// Fetch per-scheme accrual rates
 	uniqueSchemes := uniqueSchemeIDs(policies)
@@ -104,7 +108,23 @@ func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, muta
 	state.Dossier.Status = "RETIRED"
 	state.Dossier.RetirementDate = &props.RetirementDate
 
-	return msgs, false
+	// Generate patches for: status, retirement_date, attainable_pension per policy
+	fwdOps := make([]patchOp, 0, 2+n)
+	bwdOps := make([]patchOp, 0, 2+n)
+
+	fwdOps = append(fwdOps, patchOp{Op: "replace", Path: "/dossier/status", Value: marshalValue("RETIRED")})
+	bwdOps = append(bwdOps, patchOp{Op: "replace", Path: "/dossier/status", Value: marshalValue(oldStatus)})
+
+	fwdOps = append(fwdOps, patchOp{Op: "replace", Path: "/dossier/retirement_date", Value: marshalValue(props.RetirementDate)})
+	bwdOps = append(bwdOps, patchOp{Op: "replace", Path: "/dossier/retirement_date", Value: jsonNull})
+
+	for i := range state.Dossier.Policies {
+		path := "/dossier/policies/" + strconv.Itoa(i) + "/attainable_pension"
+		fwdOps = append(fwdOps, patchOp{Op: "replace", Path: path, Value: marshalValue(state.Dossier.Policies[i].AttainablePension)})
+		bwdOps = append(bwdOps, patchOp{Op: "replace", Path: path, Value: jsonNull})
+	}
+
+	return msgs, false, marshalPatches(fwdOps), marshalPatches(bwdOps)
 }
 
 func uniqueSchemeIDs(policies []model.Policy) []string {

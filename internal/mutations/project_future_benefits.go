@@ -1,6 +1,7 @@
 package mutations
 
 import (
+	"strconv"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -17,13 +18,13 @@ type projectFutureBenefitsProps struct {
 
 type ProjectFutureBenefitsHandler struct{}
 
-func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool) {
+func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool, []byte, []byte) {
 	if state.Dossier == nil {
 		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "DOSSIER_NOT_FOUND",
 			Message: "No dossier exists",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	if len(state.Dossier.Policies) == 0 {
@@ -31,7 +32,7 @@ func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation 
 			Level:   model.LevelCritical,
 			Code:    "NO_POLICIES",
 			Message: "Dossier has no policies",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	var props projectFutureBenefitsProps
@@ -42,7 +43,7 @@ func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation 
 			Level:   model.LevelCritical,
 			Code:    "INVALID_DATE_RANGE",
 			Message: "projection_end_date must be after projection_start_date",
-		}}, true
+		}}, true, emptyPatch, emptyPatch
 	}
 
 	var msgs []model.CalculationMessage
@@ -121,7 +122,16 @@ func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation 
 		}
 	}
 
-	return msgs, false
+	// Generate patches: projections per policy (null → array)
+	fwdOps := make([]patchOp, n)
+	bwdOps := make([]patchOp, n)
+	for i := range state.Dossier.Policies {
+		path := "/dossier/policies/" + strconv.Itoa(i) + "/projections"
+		fwdOps[i] = patchOp{Op: "replace", Path: path, Value: marshalValue(state.Dossier.Policies[i].Projections)}
+		bwdOps[i] = patchOp{Op: "replace", Path: path, Value: jsonNull}
+	}
+
+	return msgs, false, marshalPatches(fwdOps), marshalPatches(bwdOps)
 }
 
 // fastFormatDate formats a time.Time as "YYYY-MM-DD" without time.Format overhead
