@@ -5,6 +5,7 @@ var registry = map[string]MutationHandler{
 	"add_policy":                   &AddPolicyHandler{},
 	"apply_indexation":             &ApplyIndexationHandler{},
 	"calculate_retirement_benefit": &CalculateRetirementBenefitHandler{},
+	"project_future_benefits":      &ProjectFutureBenefitsHandler{},
 }
 
 func Get(name string) (MutationHandler, bool) {
