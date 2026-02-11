@@ -39,8 +39,8 @@ func (h *CreateDossierHandler) Execute(state *model.Situation, mutation *model.M
 	}
 
 	// Single parse: validate date and check future in one operation
-	t, err := time.Parse("2006-01-02", props.BirthDate)
-	if err != nil || t.After(time.Now()) {
+	t, ok := fastParseDate(props.BirthDate)
+	if !ok || t.After(time.Now()) {
 		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "INVALID_BIRTH_DATE",

@@ -37,8 +37,8 @@ func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, muta
 	var props calcRetirementProps
 	json.Unmarshal(mutation.MutationProperties, &props)
 
-	retDate, _ := time.Parse("2006-01-02", props.RetirementDate)
-	birthDate, _ := time.Parse("2006-01-02", state.Dossier.Persons[0].BirthDate)
+	retDate, _ := fastParseDate(props.RetirementDate)
+	birthDate, _ := fastParseDate(state.Dossier.Persons[0].BirthDate)
 
 	policies := state.Dossier.Policies
 	n := len(policies)
@@ -50,7 +50,7 @@ func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, muta
 	var totalYears float64
 
 	for i, p := range policies {
-		empStart, _ := time.Parse("2006-01-02", p.EmploymentStartDate)
+		empStart, _ := fastParseDate(p.EmploymentStartDate)
 		y := daysBetween(empStart, retDate) / 365.25
 		if y < 0 {
 			y = 0

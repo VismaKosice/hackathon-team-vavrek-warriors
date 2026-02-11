@@ -58,8 +58,8 @@ func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation 
 	}
 
 	// Apply
-	startDate, _ := time.Parse("2006-01-02", props.ProjectionStartDate)
-	endDate, _ := time.Parse("2006-01-02", props.ProjectionEndDate)
+	startDate, _ := fastParseDate(props.ProjectionStartDate)
+	endDate, _ := fastParseDate(props.ProjectionEndDate)
 
 	policies := state.Dossier.Policies
 	n := len(policies)
@@ -67,7 +67,7 @@ func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation 
 	// Pre-parse employment start dates
 	empStarts := make([]time.Time, n)
 	for i, p := range policies {
-		empStarts[i], _ = time.Parse("2006-01-02", p.EmploymentStartDate)
+		empStarts[i], _ = fastParseDate(p.EmploymentStartDate)
 	}
 
 	// Estimate projection count for pre-allocation
