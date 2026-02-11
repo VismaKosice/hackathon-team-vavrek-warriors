@@ -4,9 +4,14 @@ import (
 	"math/rand"
 	"time"
 
+	json "github.com/goccy/go-json"
+
+	"pension-engine/internal/jsonpatch"
 	"pension-engine/internal/model"
 	"pension-engine/internal/mutations"
 )
+
+var emptyPatch = []byte("[]")
 
 func Process(req *model.CalculationRequest) *model.CalculationResponse {
 	startTime := time.Now().UTC()
@@ -36,6 +41,8 @@ func Process(req *model.CalculationRequest) *model.CalculationResponse {
 			})
 			processedMutations = append(processedMutations, model.ProcessedMutation{
 				Mutation:                  mut,
+				ForwardPatch:              emptyPatch,
+				BackwardPatch:             emptyPatch,
 				CalculationMessageIndexes: []int{msgID},
 			})
 			outcome = model.OutcomeFailure
@@ -43,10 +50,17 @@ func Process(req *model.CalculationRequest) *model.CalculationResponse {
 			break
 		}
 
+		// Capture before state for JSON patch generation
+		beforeGeneric := situationToGeneric(state)
+
 		msgs, critical := handler.Execute(state, &mut)
 		if critical {
 			hasCritical = true
 		}
+
+		// Capture after state and generate patches
+		afterGeneric := situationToGeneric(state)
+		fwdJSON, bwdJSON := generatePatches(beforeGeneric, afterGeneric)
 
 		var msgIndexes []int
 		if len(msgs) > 0 {
@@ -60,6 +74,8 @@ func Process(req *model.CalculationRequest) *model.CalculationResponse {
 
 		processedMutations = append(processedMutations, model.ProcessedMutation{
 			Mutation:                  mut,
+			ForwardPatch:              fwdJSON,
+			BackwardPatch:             bwdJSON,
 			CalculationMessageIndexes: msgIndexes,
 		})
 
@@ -106,6 +122,34 @@ func Process(req *model.CalculationRequest) *model.CalculationResponse {
 			},
 		},
 	}
+}
+
+// situationToGeneric converts a Situation to a generic interface{} for JSON diffing.
+func situationToGeneric(s *model.Situation) interface{} {
+	b, _ := json.Marshal(s)
+	var result interface{}
+	json.Unmarshal(b, &result)
+	return result
+}
+
+// generatePatches produces forward and backward RFC 6902 JSON Patch documents.
+func generatePatches(before, after interface{}) (fwd, bwd []byte) {
+	fwdOps := jsonpatch.Diff(before, after, "")
+	bwdOps := jsonpatch.Diff(after, before, "")
+
+	if len(fwdOps) == 0 {
+		fwd = emptyPatch
+	} else {
+		fwd, _ = json.Marshal(fwdOps)
+	}
+
+	if len(bwdOps) == 0 {
+		bwd = emptyPatch
+	} else {
+		bwd, _ = json.Marshal(bwdOps)
+	}
+
+	return fwd, bwd
 }
 
 // fastUUID generates a UUID v4 string using math/rand instead of crypto/rand.

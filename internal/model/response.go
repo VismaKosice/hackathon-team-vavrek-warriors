@@ -1,5 +1,7 @@
 package model
 
+import "encoding/json"
+
 type CalculationResponse struct {
 	CalculationMetadata CalculationMetadata `json:"calculation_metadata"`
 	CalculationResult   CalculationResult   `json:"calculation_result"`
@@ -22,8 +24,10 @@ type CalculationResult struct {
 }
 
 type ProcessedMutation struct {
-	Mutation                  Mutation `json:"mutation"`
-	CalculationMessageIndexes []int   `json:"calculation_message_indexes,omitempty"`
+	Mutation                  Mutation         `json:"mutation"`
+	ForwardPatch              json.RawMessage  `json:"forward_patch_to_situation_after_this_mutation"`
+	BackwardPatch             json.RawMessage  `json:"backward_patch_to_previous_situation"`
+	CalculationMessageIndexes []int            `json:"calculation_message_indexes,omitempty"`
 }
 
 type SituationEnvelope struct {
