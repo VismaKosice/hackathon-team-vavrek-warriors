@@ -29,6 +29,9 @@ func Process(req *model.CalculationRequest) *model.CalculationResponse {
 	lastActualAt := req.CalculationInstructions.Mutations[0].ActualAt
 	appliedAny := false
 
+	// Cache the generic representation: "after" of mutation i becomes "before" of mutation i+1
+	lastGeneric := situationToGeneric(state)
+
 	for i, mut := range req.CalculationInstructions.Mutations {
 		handler, ok := mutations.Get(mut.MutationDefinitionName)
 		if !ok {
@@ -50,17 +53,17 @@ func Process(req *model.CalculationRequest) *model.CalculationResponse {
 			break
 		}
 
-		// Capture before state for JSON patch generation
-		beforeGeneric := situationToGeneric(state)
+		beforeGeneric := lastGeneric
 
 		msgs, critical := handler.Execute(state, &mut)
 		if critical {
 			hasCritical = true
 		}
 
-		// Capture after state and generate patches
+		// Convert after state and generate both patches in single traversal
 		afterGeneric := situationToGeneric(state)
 		fwdJSON, bwdJSON := generatePatches(beforeGeneric, afterGeneric)
+		lastGeneric = afterGeneric
 
 		var msgIndexes []int
 		if len(msgs) > 0 {
@@ -124,18 +127,75 @@ func Process(req *model.CalculationRequest) *model.CalculationResponse {
 	}
 }
 
-// situationToGeneric converts a Situation to a generic interface{} for JSON diffing.
+// situationToGeneric converts a Situation directly to a generic map for JSON diffing.
+// Avoids the expensive json.Marshal + json.Unmarshal roundtrip.
 func situationToGeneric(s *model.Situation) interface{} {
-	b, _ := json.Marshal(s)
-	var result interface{}
-	json.Unmarshal(b, &result)
-	return result
+	m := make(map[string]interface{}, 1)
+	if s.Dossier == nil {
+		m["dossier"] = nil
+		return m
+	}
+
+	d := s.Dossier
+	dm := make(map[string]interface{}, 5)
+	dm["dossier_id"] = d.DossierID
+	dm["status"] = d.Status
+
+	if d.RetirementDate != nil {
+		dm["retirement_date"] = *d.RetirementDate
+	} else {
+		dm["retirement_date"] = nil
+	}
+
+	persons := make([]interface{}, len(d.Persons))
+	for i, p := range d.Persons {
+		persons[i] = map[string]interface{}{
+			"person_id":  p.PersonID,
+			"role":       p.Role,
+			"name":       p.Name,
+			"birth_date": p.BirthDate,
+		}
+	}
+	dm["persons"] = persons
+
+	policies := make([]interface{}, len(d.Policies))
+	for i, p := range d.Policies {
+		pm := make(map[string]interface{}, 7)
+		pm["policy_id"] = p.PolicyID
+		pm["scheme_id"] = p.SchemeID
+		pm["employment_start_date"] = p.EmploymentStartDate
+		pm["salary"] = p.Salary
+		pm["part_time_factor"] = p.PartTimeFactor
+
+		if p.AttainablePension != nil {
+			pm["attainable_pension"] = *p.AttainablePension
+		} else {
+			pm["attainable_pension"] = nil
+		}
+
+		if p.Projections != nil {
+			projs := make([]interface{}, len(p.Projections))
+			for j, proj := range p.Projections {
+				projs[j] = map[string]interface{}{
+					"date":             proj.Date,
+					"projected_pension": proj.ProjectedPension,
+				}
+			}
+			pm["projections"] = projs
+		} else {
+			pm["projections"] = nil
+		}
+		policies[i] = pm
+	}
+	dm["policies"] = policies
+
+	m["dossier"] = dm
+	return m
 }
 
-// generatePatches produces forward and backward RFC 6902 JSON Patch documents.
+// generatePatches produces forward and backward RFC 6902 JSON Patch documents in a single traversal.
 func generatePatches(before, after interface{}) (fwd, bwd []byte) {
-	fwdOps := jsonpatch.Diff(before, after, "")
-	bwdOps := jsonpatch.Diff(after, before, "")
+	fwdOps, bwdOps := jsonpatch.DiffBoth(before, after, "")
 
 	if len(fwdOps) == 0 {
 		fwd = emptyPatch

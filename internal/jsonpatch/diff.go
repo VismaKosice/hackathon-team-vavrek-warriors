@@ -43,10 +43,9 @@ func diffObjects(a, b map[string]interface{}, path string) []map[string]interfac
 	var ops []map[string]interface{}
 
 	// Removed keys (in a but not in b)
-	for k, av := range a {
+	for k := range a {
 		if _, ok := b[k]; !ok {
 			ops = append(ops, removeOp(path+"/"+escapeKey(k)))
-			_ = av
 		}
 	}
 
@@ -90,6 +89,93 @@ func diffArrays(a, b []interface{}, path string) []map[string]interface{} {
 	}
 
 	return ops
+}
+
+// DiffBoth computes both forward (a→b) and backward (b→a) patches in a single traversal.
+func DiffBoth(a, b interface{}, path string) (fwd, bwd []map[string]interface{}) {
+	if a == nil && b == nil {
+		return nil, nil
+	}
+	if a == nil || b == nil {
+		return []map[string]interface{}{replaceOp(path, b)},
+			[]map[string]interface{}{replaceOp(path, a)}
+	}
+
+	aMap, aIsMap := a.(map[string]interface{})
+	bMap, bIsMap := b.(map[string]interface{})
+	if aIsMap && bIsMap {
+		return diffObjectsBoth(aMap, bMap, path)
+	}
+
+	aArr, aIsArr := a.([]interface{})
+	bArr, bIsArr := b.([]interface{})
+	if aIsArr && bIsArr {
+		return diffArraysBoth(aArr, bArr, path)
+	}
+
+	if a != b {
+		return []map[string]interface{}{replaceOp(path, b)},
+			[]map[string]interface{}{replaceOp(path, a)}
+	}
+
+	return nil, nil
+}
+
+func diffObjectsBoth(a, b map[string]interface{}, path string) (fwd, bwd []map[string]interface{}) {
+	for k, av := range a {
+		childPath := path + "/" + escapeKey(k)
+		if _, ok := b[k]; !ok {
+			fwd = append(fwd, removeOp(childPath))
+			bwd = append(bwd, addOp(childPath, av))
+		}
+	}
+
+	for k, bv := range b {
+		childPath := path + "/" + escapeKey(k)
+		av, inA := a[k]
+		if !inA {
+			fwd = append(fwd, addOp(childPath, bv))
+			bwd = append(bwd, removeOp(childPath))
+		} else {
+			subFwd, subBwd := DiffBoth(av, bv, childPath)
+			fwd = append(fwd, subFwd...)
+			bwd = append(bwd, subBwd...)
+		}
+	}
+
+	return fwd, bwd
+}
+
+func diffArraysBoth(a, b []interface{}, path string) (fwd, bwd []map[string]interface{}) {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+
+	for i := 0; i < minLen; i++ {
+		childPath := path + "/" + strconv.Itoa(i)
+		subFwd, subBwd := DiffBoth(a[i], b[i], childPath)
+		fwd = append(fwd, subFwd...)
+		bwd = append(bwd, subBwd...)
+	}
+
+	// a has extra elements: forward removes (descending), backward adds (ascending)
+	for i := len(a) - 1; i >= minLen; i-- {
+		fwd = append(fwd, removeOp(path+"/"+strconv.Itoa(i)))
+	}
+	for i := minLen; i < len(a); i++ {
+		bwd = append(bwd, addOp(path+"/"+strconv.Itoa(i), a[i]))
+	}
+
+	// b has extra elements: forward adds (ascending), backward removes (descending)
+	for i := minLen; i < len(b); i++ {
+		fwd = append(fwd, addOp(path+"/"+strconv.Itoa(i), b[i]))
+	}
+	for i := len(b) - 1; i >= minLen; i-- {
+		bwd = append(bwd, removeOp(path+"/"+strconv.Itoa(i)))
+	}
+
+	return fwd, bwd
 }
 
 func replaceOp(path string, value interface{}) map[string]interface{} {

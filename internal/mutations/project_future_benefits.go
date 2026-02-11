@@ -6,6 +6,7 @@ import (
 	json "github.com/goccy/go-json"
 
 	"pension-engine/internal/model"
+	"pension-engine/internal/schemeregistry"
 )
 
 type projectFutureBenefitsProps struct {
@@ -80,7 +81,9 @@ func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation 
 		state.Dossier.Policies[i].Projections = make([]model.Projection, 0, estCount)
 	}
 
-	const accrualRate = 0.02
+	// Fetch per-scheme accrual rates
+	uniqueSchemes := uniqueSchemeIDs(policies)
+	rates := schemeregistry.GetAccrualRates(uniqueSchemes)
 
 	// Reuse years slice across iterations
 	years := make([]float64, n)
@@ -100,11 +103,10 @@ func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation 
 
 		var annualPension float64
 		if totalYears > 0 {
-			var weightedSum float64
 			for i, p := range policies {
-				weightedSum += (p.Salary * p.PartTimeFactor) * years[i]
+				rate := rates[p.SchemeID]
+				annualPension += (p.Salary * p.PartTimeFactor) * years[i] * rate
 			}
-			annualPension = weightedSum * accrualRate
 		}
 
 		for i := range state.Dossier.Policies {

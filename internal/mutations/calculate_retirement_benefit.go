@@ -7,6 +7,7 @@ import (
 	json "github.com/goccy/go-json"
 
 	"pension-engine/internal/model"
+	"pension-engine/internal/schemeregistry"
 )
 
 type calcRetirementProps struct {
@@ -79,20 +80,18 @@ func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, muta
 		}
 	}
 
-	// Apply: compute pension
-	const accrualRate = 0.02
+	// Fetch per-scheme accrual rates
+	uniqueSchemes := uniqueSchemeIDs(policies)
+	rates := schemeregistry.GetAccrualRates(uniqueSchemes)
 
-	var weightedSum float64
-	for i := range policies {
-		weightedSum += effectiveSalaries[i] * years[i]
-	}
-
-	var weightedAvg float64
+	// Compute annual pension with per-scheme accrual rates
+	var annualPension float64
 	if totalYears > 0 {
-		weightedAvg = weightedSum / totalYears
+		for i := range policies {
+			rate := rates[policies[i].SchemeID]
+			annualPension += effectiveSalaries[i] * years[i] * rate
+		}
 	}
-
-	annualPension := weightedAvg * totalYears * accrualRate
 
 	for i := range state.Dossier.Policies {
 		var policyPension float64
@@ -106,6 +105,18 @@ func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, muta
 	state.Dossier.RetirementDate = &props.RetirementDate
 
 	return msgs, false
+}
+
+func uniqueSchemeIDs(policies []model.Policy) []string {
+	seen := make(map[string]struct{}, len(policies))
+	result := make([]string, 0, len(policies))
+	for _, p := range policies {
+		if _, ok := seen[p.SchemeID]; !ok {
+			seen[p.SchemeID] = struct{}{}
+			result = append(result, p.SchemeID)
+		}
+	}
+	return result
 }
 
 func daysBetween(start, end time.Time) float64 {
