@@ -1,8 +1,7 @@
 package mutations
 
 import (
-	"encoding/json"
-	"fmt"
+	json "github.com/goccy/go-json"
 
 	"pension-engine/internal/model"
 )
@@ -15,75 +14,57 @@ type applyIndexationProps struct {
 
 type ApplyIndexationHandler struct{}
 
-func (h *ApplyIndexationHandler) Validate(state *model.Situation, mutation *model.Mutation) []model.CalculationMessage {
-	var msgs []model.CalculationMessage
-
+func (h *ApplyIndexationHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool) {
 	if state.Dossier == nil {
-		msgs = append(msgs, model.CalculationMessage{
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "DOSSIER_NOT_FOUND",
 			Message: "No dossier exists",
-		})
-		return msgs
+		}}, true
 	}
 
 	if len(state.Dossier.Policies) == 0 {
-		msgs = append(msgs, model.CalculationMessage{
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "NO_POLICIES",
 			Message: "Dossier has no policies",
-		})
-		return msgs
+		}}, true
 	}
 
-	var props applyIndexationProps
-	json.Unmarshal(mutation.MutationProperties, &props)
-
-	hasFilter := props.SchemeID != "" || props.EffectiveBefore != ""
-	if hasFilter {
-		matched := false
-		for _, p := range state.Dossier.Policies {
-			if matchesFilter(p, props) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			msgs = append(msgs, model.CalculationMessage{
-				Level:   model.LevelWarning,
-				Code:    "NO_MATCHING_POLICIES",
-				Message: "No policies match the provided filter criteria",
-			})
-		}
-	}
-
-	return msgs
-}
-
-func (h *ApplyIndexationHandler) Apply(state *model.Situation, mutation *model.Mutation) []model.CalculationMessage {
 	var props applyIndexationProps
 	json.Unmarshal(mutation.MutationProperties, &props)
 
 	var msgs []model.CalculationMessage
+	hasFilter := props.SchemeID != "" || props.EffectiveBefore != ""
 
+	// Single pass: validate filter match AND apply indexation
+	matched := false
 	for i := range state.Dossier.Policies {
 		if !matchesFilter(state.Dossier.Policies[i], props) {
 			continue
 		}
-
+		matched = true
 		newSalary := state.Dossier.Policies[i].Salary * (1 + props.Percentage)
 		if newSalary < 0 {
 			newSalary = 0
 			msgs = append(msgs, model.CalculationMessage{
 				Level:   model.LevelWarning,
 				Code:    "NEGATIVE_SALARY_CLAMPED",
-				Message: fmt.Sprintf("Salary for policy %s clamped to 0", state.Dossier.Policies[i].PolicyID),
+				Message: "Salary for policy " + state.Dossier.Policies[i].PolicyID + " clamped to 0",
 			})
 		}
 		state.Dossier.Policies[i].Salary = newSalary
 	}
 
-	return msgs
+	if hasFilter && !matched {
+		msgs = append([]model.CalculationMessage{{
+			Level:   model.LevelWarning,
+			Code:    "NO_MATCHING_POLICIES",
+			Message: "No policies match the provided filter criteria",
+		}}, msgs...)
+	}
+
+	return msgs, false
 }
 
 func matchesFilter(p model.Policy, props applyIndexationProps) bool {

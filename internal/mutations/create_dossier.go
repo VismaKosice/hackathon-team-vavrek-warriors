@@ -1,9 +1,10 @@
 package mutations
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
+
+	json "github.com/goccy/go-json"
 
 	"pension-engine/internal/model"
 )
@@ -17,46 +18,37 @@ type createDossierProps struct {
 
 type CreateDossierHandler struct{}
 
-func (h *CreateDossierHandler) Validate(state *model.Situation, mutation *model.Mutation) []model.CalculationMessage {
-	var msgs []model.CalculationMessage
-
+func (h *CreateDossierHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool) {
 	if state.Dossier != nil {
-		msgs = append(msgs, model.CalculationMessage{
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "DOSSIER_ALREADY_EXISTS",
 			Message: "A dossier already exists",
-		})
-		return msgs
+		}}, true
 	}
 
 	var props createDossierProps
 	json.Unmarshal(mutation.MutationProperties, &props)
 
 	if strings.TrimSpace(props.Name) == "" {
-		msgs = append(msgs, model.CalculationMessage{
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "INVALID_NAME",
 			Message: "Name is empty or blank",
-		})
-		return msgs
+		}}, true
 	}
 
-	if !isValidDate(props.BirthDate) || isFutureDate(props.BirthDate) {
-		msgs = append(msgs, model.CalculationMessage{
+	// Single parse: validate date and check future in one operation
+	t, err := time.Parse("2006-01-02", props.BirthDate)
+	if err != nil || t.After(time.Now()) {
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "INVALID_BIRTH_DATE",
 			Message: "Birth date is invalid or in the future",
-		})
-		return msgs
+		}}, true
 	}
 
-	return msgs
-}
-
-func (h *CreateDossierHandler) Apply(state *model.Situation, mutation *model.Mutation) []model.CalculationMessage {
-	var props createDossierProps
-	json.Unmarshal(mutation.MutationProperties, &props)
-
+	// Apply
 	state.Dossier = &model.Dossier{
 		DossierID:      props.DossierID,
 		Status:         "ACTIVE",
@@ -73,18 +65,5 @@ func (h *CreateDossierHandler) Apply(state *model.Situation, mutation *model.Mut
 		PolicySeq: 0,
 	}
 
-	return nil
-}
-
-func isValidDate(s string) bool {
-	_, err := time.Parse("2006-01-02", s)
-	return err == nil
-}
-
-func isFutureDate(s string) bool {
-	t, err := time.Parse("2006-01-02", s)
-	if err != nil {
-		return false
-	}
-	return t.After(time.Now())
+	return nil, false
 }

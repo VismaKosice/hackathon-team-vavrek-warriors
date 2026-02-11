@@ -1,9 +1,9 @@
 package mutations
 
 import (
-	"encoding/json"
-	"fmt"
 	"time"
+
+	json "github.com/goccy/go-json"
 
 	"pension-engine/internal/model"
 )
@@ -16,56 +16,46 @@ type projectFutureBenefitsProps struct {
 
 type ProjectFutureBenefitsHandler struct{}
 
-func (h *ProjectFutureBenefitsHandler) Validate(state *model.Situation, mutation *model.Mutation) []model.CalculationMessage {
-	var msgs []model.CalculationMessage
-
+func (h *ProjectFutureBenefitsHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool) {
 	if state.Dossier == nil {
-		msgs = append(msgs, model.CalculationMessage{
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "DOSSIER_NOT_FOUND",
 			Message: "No dossier exists",
-		})
-		return msgs
+		}}, true
 	}
 
 	if len(state.Dossier.Policies) == 0 {
-		msgs = append(msgs, model.CalculationMessage{
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "NO_POLICIES",
 			Message: "Dossier has no policies",
-		})
-		return msgs
+		}}, true
 	}
 
 	var props projectFutureBenefitsProps
 	json.Unmarshal(mutation.MutationProperties, &props)
 
 	if props.ProjectionEndDate <= props.ProjectionStartDate {
-		msgs = append(msgs, model.CalculationMessage{
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "INVALID_DATE_RANGE",
 			Message: "projection_end_date must be after projection_start_date",
-		})
-		return msgs
+		}}, true
 	}
 
+	var msgs []model.CalculationMessage
 	for _, p := range state.Dossier.Policies {
 		if props.ProjectionStartDate < p.EmploymentStartDate {
 			msgs = append(msgs, model.CalculationMessage{
 				Level:   model.LevelWarning,
 				Code:    "PROJECTION_BEFORE_EMPLOYMENT",
-				Message: fmt.Sprintf("Projection start date is before employment start date for policy %s", p.PolicyID),
+				Message: "Projection start date is before employment start date for policy " + p.PolicyID,
 			})
 		}
 	}
 
-	return msgs
-}
-
-func (h *ProjectFutureBenefitsHandler) Apply(state *model.Situation, mutation *model.Mutation) []model.CalculationMessage {
-	var props projectFutureBenefitsProps
-	json.Unmarshal(mutation.MutationProperties, &props)
-
+	// Apply
 	startDate, _ := time.Parse("2006-01-02", props.ProjectionStartDate)
 	endDate, _ := time.Parse("2006-01-02", props.ProjectionEndDate)
 
@@ -78,44 +68,45 @@ func (h *ProjectFutureBenefitsHandler) Apply(state *model.Situation, mutation *m
 		empStarts[i], _ = time.Parse("2006-01-02", p.EmploymentStartDate)
 	}
 
-	// Initialize projections arrays
+	// Estimate projection count for pre-allocation
+	months := (endDate.Year()-startDate.Year())*12 + int(endDate.Month()-startDate.Month())
+	estCount := 1
+	if props.ProjectionIntervalMths > 0 {
+		estCount = months/props.ProjectionIntervalMths + 2
+	}
+
+	// Initialize projections arrays with pre-allocated capacity
 	for i := range state.Dossier.Policies {
-		state.Dossier.Policies[i].Projections = []model.Projection{}
+		state.Dossier.Policies[i].Projections = make([]model.Projection, 0, estCount)
 	}
 
 	const accrualRate = 0.02
 
-	// Step through projection dates
+	// Reuse years slice across iterations
+	years := make([]float64, n)
+
 	for projDate := startDate; !projDate.After(endDate); projDate = projDate.AddDate(0, props.ProjectionIntervalMths, 0) {
-		dateStr := projDate.Format("2006-01-02")
+		dateStr := fastFormatDate(projDate)
 
-		// Calculate years of service and effective salaries
-		years := make([]float64, n)
 		var totalYears float64
-
-		for i, p := range policies {
+		for i := range policies {
 			y := daysBetween(empStarts[i], projDate) / 365.25
 			if y < 0 {
 				y = 0
 			}
 			years[i] = y
-			_ = p // use p for nothing else; salary/ptf accessed via policies[i]
 			totalYears += y
 		}
 
-		// Weighted sum of effective salaries
-		var weightedSum float64
-		for i, p := range policies {
-			weightedSum += (p.Salary * p.PartTimeFactor) * years[i]
-		}
-
-		// Annual pension
 		var annualPension float64
 		if totalYears > 0 {
+			var weightedSum float64
+			for i, p := range policies {
+				weightedSum += (p.Salary * p.PartTimeFactor) * years[i]
+			}
 			annualPension = weightedSum * accrualRate
 		}
 
-		// Per-policy projected pension
 		for i := range state.Dossier.Policies {
 			var projected float64
 			if totalYears > 0 {
@@ -128,5 +119,22 @@ func (h *ProjectFutureBenefitsHandler) Apply(state *model.Situation, mutation *m
 		}
 	}
 
-	return nil
+	return msgs, false
+}
+
+// fastFormatDate formats a time.Time as "YYYY-MM-DD" without time.Format overhead
+func fastFormatDate(t time.Time) string {
+	y, m, d := t.Date()
+	var buf [10]byte
+	buf[0] = byte('0' + y/1000)
+	buf[1] = byte('0' + (y/100)%10)
+	buf[2] = byte('0' + (y/10)%10)
+	buf[3] = byte('0' + y%10)
+	buf[4] = '-'
+	buf[5] = byte('0' + m/10)
+	buf[6] = byte('0' + m%10)
+	buf[7] = '-'
+	buf[8] = byte('0' + d/10)
+	buf[9] = byte('0' + d%10)
+	return string(buf[:])
 }

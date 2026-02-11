@@ -1,41 +1,48 @@
 package handler
 
 import (
-	"encoding/json"
-	"net/http"
+	json "github.com/goccy/go-json"
+	"github.com/valyala/fasthttp"
 
 	"pension-engine/internal/engine"
 	"pension-engine/internal/model"
 )
 
-func HandleCalculation(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusBadRequest, "Method not allowed")
+func HandleCalculation(ctx *fasthttp.RequestCtx) {
+	if !ctx.IsPost() {
+		writeError(ctx, 400, "Method not allowed")
+		return
+	}
+
+	if string(ctx.Path()) != "/calculation-requests" {
+		ctx.SetStatusCode(404)
 		return
 	}
 
 	var req model.CalculationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
+		writeError(ctx, 400, "Invalid request body: "+err.Error())
 		return
 	}
 
 	if len(req.CalculationInstructions.Mutations) == 0 {
-		writeError(w, http.StatusBadRequest, "At least one mutation is required")
+		writeError(ctx, 400, "At least one mutation is required")
 		return
 	}
 
 	resp := engine.Process(&req)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	ctx.SetContentType("application/json")
+	body, _ := json.Marshal(resp)
+	ctx.SetBody(body)
 }
 
-func writeError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(model.ErrorResponse{
+func writeError(ctx *fasthttp.RequestCtx, status int, message string) {
+	ctx.SetContentType("application/json")
+	ctx.SetStatusCode(status)
+	body, _ := json.Marshal(model.ErrorResponse{
 		Status:  status,
 		Message: message,
 	})
+	ctx.SetBody(body)
 }

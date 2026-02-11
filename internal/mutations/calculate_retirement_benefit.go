@@ -1,9 +1,10 @@
 package mutations
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
+
+	json "github.com/goccy/go-json"
 
 	"pension-engine/internal/model"
 )
@@ -14,25 +15,21 @@ type calcRetirementProps struct {
 
 type CalculateRetirementBenefitHandler struct{}
 
-func (h *CalculateRetirementBenefitHandler) Validate(state *model.Situation, mutation *model.Mutation) []model.CalculationMessage {
-	var msgs []model.CalculationMessage
-
+func (h *CalculateRetirementBenefitHandler) Execute(state *model.Situation, mutation *model.Mutation) ([]model.CalculationMessage, bool) {
 	if state.Dossier == nil {
-		msgs = append(msgs, model.CalculationMessage{
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "DOSSIER_NOT_FOUND",
 			Message: "No dossier exists",
-		})
-		return msgs
+		}}, true
 	}
 
 	if len(state.Dossier.Policies) == 0 {
-		msgs = append(msgs, model.CalculationMessage{
+		return []model.CalculationMessage{{
 			Level:   model.LevelCritical,
 			Code:    "NO_POLICIES",
 			Message: "Dossier has no policies",
-		})
-		return msgs
+		}}, true
 	}
 
 	var props calcRetirementProps
@@ -41,56 +38,11 @@ func (h *CalculateRetirementBenefitHandler) Validate(state *model.Situation, mut
 	retDate, _ := time.Parse("2006-01-02", props.RetirementDate)
 	birthDate, _ := time.Parse("2006-01-02", state.Dossier.Persons[0].BirthDate)
 
-	// Age on retirement date (calendar years for eligibility)
-	age := calendarYears(birthDate, retDate)
-
-	// Total years of service across all policies (days / 365.25 per spec)
-	var totalYears float64
-	for _, p := range state.Dossier.Policies {
-		empStart, _ := time.Parse("2006-01-02", p.EmploymentStartDate)
-		years := daysBetween(empStart, retDate) / 365.25
-		if years < 0 {
-			years = 0
-		}
-		totalYears += years
-	}
-
-	// Eligibility: must be >= 65 years old OR total years of service >= 40
-	if age < 65 && totalYears < 40 {
-		msgs = append(msgs, model.CalculationMessage{
-			Level:   model.LevelCritical,
-			Code:    "NOT_ELIGIBLE",
-			Message: fmt.Sprintf("Participant is %d years old with %.1f years of service", int(age), totalYears),
-		})
-		return msgs
-	}
-
-	// Check retirement before employment (WARNING per violating policy)
-	for _, p := range state.Dossier.Policies {
-		if props.RetirementDate < p.EmploymentStartDate {
-			msgs = append(msgs, model.CalculationMessage{
-				Level:   model.LevelWarning,
-				Code:    "RETIREMENT_BEFORE_EMPLOYMENT",
-				Message: fmt.Sprintf("Retirement date is before employment start date for policy %s", p.PolicyID),
-			})
-		}
-	}
-
-	return msgs
-}
-
-func (h *CalculateRetirementBenefitHandler) Apply(state *model.Situation, mutation *model.Mutation) []model.CalculationMessage {
-	var props calcRetirementProps
-	json.Unmarshal(mutation.MutationProperties, &props)
-
-	retDate, _ := time.Parse("2006-01-02", props.RetirementDate)
-
-	const accrualRate = 0.02
-
 	policies := state.Dossier.Policies
 	n := len(policies)
 
-	// Per-policy: years of service and effective salary
+	// Single pass: parse dates, compute years of service and effective salaries
+	age := calendarYears(birthDate, retDate)
 	years := make([]float64, n)
 	effectiveSalaries := make([]float64, n)
 	var totalYears float64
@@ -106,7 +58,30 @@ func (h *CalculateRetirementBenefitHandler) Apply(state *model.Situation, mutati
 		totalYears += y
 	}
 
-	// Weighted average salary
+	// Eligibility: must be >= 65 years old OR total years of service >= 40
+	if age < 65 && totalYears < 40 {
+		return []model.CalculationMessage{{
+			Level:   model.LevelCritical,
+			Code:    "NOT_ELIGIBLE",
+			Message: fmt.Sprintf("Participant is %d years old with %.1f years of service", int(age), totalYears),
+		}}, true
+	}
+
+	// Check retirement before employment (WARNING per violating policy)
+	var msgs []model.CalculationMessage
+	for _, p := range policies {
+		if props.RetirementDate < p.EmploymentStartDate {
+			msgs = append(msgs, model.CalculationMessage{
+				Level:   model.LevelWarning,
+				Code:    "RETIREMENT_BEFORE_EMPLOYMENT",
+				Message: "Retirement date is before employment start date for policy " + p.PolicyID,
+			})
+		}
+	}
+
+	// Apply: compute pension
+	const accrualRate = 0.02
+
 	var weightedSum float64
 	for i := range policies {
 		weightedSum += effectiveSalaries[i] * years[i]
@@ -117,10 +92,8 @@ func (h *CalculateRetirementBenefitHandler) Apply(state *model.Situation, mutati
 		weightedAvg = weightedSum / totalYears
 	}
 
-	// Annual pension
 	annualPension := weightedAvg * totalYears * accrualRate
 
-	// Distribute proportionally by years of service
 	for i := range state.Dossier.Policies {
 		var policyPension float64
 		if totalYears > 0 {
@@ -129,18 +102,16 @@ func (h *CalculateRetirementBenefitHandler) Apply(state *model.Situation, mutati
 		state.Dossier.Policies[i].AttainablePension = &policyPension
 	}
 
-	// Update dossier status
 	state.Dossier.Status = "RETIRED"
 	state.Dossier.RetirementDate = &props.RetirementDate
 
-	return nil
+	return msgs, false
 }
 
 func daysBetween(start, end time.Time) float64 {
 	return end.Sub(start).Hours() / 24
 }
 
-// calendarYears returns whole years between two dates (for age eligibility).
 func calendarYears(birth, target time.Time) float64 {
 	years := float64(target.Year() - birth.Year())
 	if target.Month() < birth.Month() ||
